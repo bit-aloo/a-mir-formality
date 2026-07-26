@@ -2,6 +2,21 @@
 use a_mir_formality::{crates, FormalityTest};
 
 #[test]
+fn reference_to_local_type_is_local() {
+    FormalityTest::new(crates![
+        crate core {
+            trait CoreTrait {}
+        },
+        crate foo {
+            struct Foo {}
+            impl CoreTrait for &'static Foo {}
+        }
+    ])
+    .skip_execute()
+    .ok()
+}
+
+#[test]
 fn neg_CoreTrait_for_CoreStruct_in_Foo() {
     FormalityTest::new(crates![crate core {
                 trait CoreTrait {}
