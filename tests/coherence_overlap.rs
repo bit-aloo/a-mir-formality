@@ -336,3 +336,58 @@ fn is_local_with_unconstrained_self_ty_blanket_impl() {
               impl <ty, ty> Overlap <^ty0_1> for ^ty0_0 where <^ty0_0 as Project>::Assoc : Foo <^ty0_1> { }
               impl <ty> Overlap <LocalType> for ^ty0_0 { }"#]])
 }
+
+#[test]
+fn upstream_positive_blanket_overlaps_downstream_negative() {
+    FormalityTest::new(crates![crate core {
+        trait Foo {}
+        impl<T> Foo for T {}
+    },
+    crate foo {
+        struct Local {}
+        impl !Foo for Local {}
+    }])
+    .skip_execute()
+    .err(expect_test::expect![[r#"
+        the rule "check_coherence" at (coherence.rs) failed because
+          impls may overlap:
+          impl <ty> Foo for ^ty0_0 { }
+          impl ! Foo for Local {}"#]]);
+}
+
+#[test]
+fn generic_negative_overlaps_specific_negative() {
+    FormalityTest::new(crates![crate core {
+        trait Foo {}
+        impl<T> !Foo for T {}
+        impl !Foo for u32 {}
+    }])
+    .skip_execute()
+    .err(expect_test::expect![[r#"
+        the rule "check_coherence" at (coherence.rs) failed because
+          impls may overlap:
+          impl <ty> ! Foo for ^ty0_0 {}
+          impl ! Foo for u32 {}"#]]);
+}
+
+#[test]
+fn distinct_positive_and_negative_impls_do_not_overlap() {
+    FormalityTest::new(crates![crate core {
+        trait Foo {}
+        impl Foo for u32 {}
+        impl !Foo for i32 {}
+    }])
+    .skip_execute()
+    .ok()
+}
+
+#[test]
+fn distinct_negative_impls_do_not_overlap() {
+    FormalityTest::new(crates![crate core {
+        trait Foo {}
+        impl !Foo for u32 {}
+        impl !Foo for i32 {}
+    }])
+    .skip_execute()
+    .ok()
+}
