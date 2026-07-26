@@ -1,6 +1,9 @@
-use crate::grammar::{Crate, Fallible, NegTraitImpl, Predicate, TraitImpl, Wc, Wcs};
+use crate::grammar::{
+    Crate, Fallible, NegTraitImpl, Predicate, TraitImpl, TraitRef, Wc, Wcs, WhereClause,
+};
 use crate::prove::{Env, Program};
 use anyhow::bail;
+use std::fmt::Debug;
 
 use super::{prove_goal, prove_not_goal};
 use formality_core::{judgment::ProofTree, judgment_fn};
@@ -14,12 +17,28 @@ judgment_fn! {
         (
             (let current_crate_impls = program.trait_impls_in_crate(&current_crate))
             (let all_crate_impls = program.trait_impls())
+            (let current_crate_neg_impls = program.neg_trait_impls_in_crate(&current_crate))
+            (let all_crate_neg_impls = program.neg_trait_impls())
+
             (for_all(impl_a in current_crate_impls)
                 (for_all(impl_b in all_crate_impls)
                     (overlap_check_impl(program, impl_a, impl_b) => ())))
+
+            (for_all(impl_a in current_crate_impls)
+                (for_all(neg_impl_b in all_crate_neg_impls)
+                    (overlap_check_impl_neg(program, impl_a, neg_impl_b) => ())))
+
+            (for_all(neg_impl_a in current_crate_neg_impls)
+                (for_all(impl_b in all_crate_impls)
+                    (overlap_check_impl_neg(program, impl_b, neg_impl_a) => ())))
+
+            (for_all(neg_impl_a in current_crate_neg_impls)
+                (for_all(neg_impl_b in all_crate_neg_impls)
+                    (overlap_check_neg_neg(program, neg_impl_a, neg_impl_b) => ())))
+
             (for_all(trait_impl in current_crate_impls)
                 (orphan_check(program, trait_impl) => ()))
-            (for_all(neg_trait_impl in program.neg_trait_impls_in_crate(&current_crate))
+            (for_all(neg_trait_impl in current_crate_neg_impls)
                 (orphan_check_neg(program, neg_trait_impl) => ()))
             --- ("check_coherence")
             (check_coherence(program, current_crate) => ())
@@ -102,6 +121,101 @@ fn overlap_check_impl(
     let trait_ref_a = a.trait_ref();
     let trait_ref_b = b.trait_ref();
 
+    overlap_check_headers(
+        program,
+        &env,
+        &trait_ref_a,
+        &a.where_clauses,
+        &trait_ref_b,
+        &b.where_clauses,
+        impl_a,
+        impl_b,
+    )
+}
+
+#[tracing::instrument(level = "Debug", skip(program, impl_a, impl_b))]
+fn overlap_check_impl_neg(
+    program: &Program,
+    impl_a: &TraitImpl,
+    impl_b: &NegTraitImpl,
+) -> Fallible<ProofTree> {
+    if impl_a.trait_id() != &impl_b.binder.peek().trait_id {
+        return Ok(ProofTree::new(
+            "overlap_check",
+            Some("skip_different_trait"),
+            vec![],
+        ));
+    }
+
+    let (env, a) = Env::default().instantiate_universally(&impl_a.binder);
+    let (env, b) = env.instantiate_universally(&impl_b.binder);
+
+    let trait_ref_a = a.trait_ref();
+    let trait_ref_b = b.trait_ref();
+
+    overlap_check_headers(
+        program,
+        &env,
+        &trait_ref_a,
+        &a.where_clauses,
+        &trait_ref_b,
+        &b.where_clauses,
+        impl_a,
+        impl_b,
+    )
+}
+
+#[tracing::instrument(level = "Debug", skip(program, impl_a, impl_b))]
+fn overlap_check_neg_neg(
+    program: &Program,
+    impl_a: &NegTraitImpl,
+    impl_b: &NegTraitImpl,
+) -> Fallible<ProofTree> {
+    if impl_a == impl_b {
+        return Ok(ProofTree::new(
+            "overlap_check",
+            Some("skip_same_impl"),
+            vec![],
+        ));
+    }
+
+    if impl_a.binder.peek().trait_id != impl_b.binder.peek().trait_id {
+        return Ok(ProofTree::new(
+            "overlap_check",
+            Some("skip_different_trait"),
+            vec![],
+        ));
+    }
+
+    let (env, a) = Env::default().instantiate_universally(&impl_a.binder);
+    let (env, b) = env.instantiate_universally(&impl_b.binder);
+
+    let trait_ref_a = a.trait_ref();
+    let trait_ref_b = b.trait_ref();
+
+    overlap_check_headers(
+        program,
+        &env,
+        &trait_ref_a,
+        &a.where_clauses,
+        &trait_ref_b,
+        &b.where_clauses,
+        impl_a,
+        impl_b,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn overlap_check_headers(
+    program: &Program,
+    env: &Env,
+    trait_ref_a: &TraitRef,
+    where_clauses_a: &[WhereClause],
+    trait_ref_b: &TraitRef,
+    where_clauses_b: &[WhereClause],
+    impl_a: &dyn Debug,
+    impl_b: &dyn Debug,
+) -> Fallible<ProofTree> {
     assert_eq!(trait_ref_a.trait_id, trait_ref_b.trait_id);
 
     // ... ¬(coherence_mode => (Ts_a = Ts_b ∧ Wc_a ∧ Wc_b))
@@ -115,20 +229,20 @@ fn overlap_check_impl(
     // self.prove_not_goal(&env, &(Wcs::wf))
     if let Ok(proof_tree) = prove_not_goal(
         program,
-        &env,
+        env,
         (),
         (
             Wcs::all_eq(&trait_ref_a.parameters, &trait_ref_b.parameters),
-            &a.where_clauses,
-            &b.where_clauses,
+            where_clauses_a,
+            where_clauses_b,
         ),
     ) {
         tracing::debug!(
             "proved not {:?}",
             (
                 Wcs::all_eq(&trait_ref_a.parameters, &trait_ref_b.parameters),
-                &a.where_clauses,
-                &b.where_clauses,
+                where_clauses_a,
+                where_clauses_b,
             )
         );
 
@@ -141,21 +255,20 @@ fn overlap_check_impl(
 
     // try inverted where-clauses from Wc_a / Wc_b (e.g. T: Debug => T: !Debug).
     // If (equal params ∧ Wc_a ∧ Wc_b) => Wc_i is provable the two impls cannot both apply.
-    let inverted: Vec<Wc> = a
-        .where_clauses
+    let inverted: Vec<Wc> = where_clauses_a
         .iter()
-        .chain(&b.where_clauses)
+        .chain(where_clauses_b)
         .flat_map(|wc| wc.invert())
         .collect();
 
     if let Some(inverted_wc) = inverted.iter().find(|inverted_wc| {
         prove_goal(
             program,
-            &env,
+            env,
             (
                 Wcs::all_eq(&trait_ref_a.parameters, &trait_ref_b.parameters),
-                &a.where_clauses,
-                &b.where_clauses,
+                where_clauses_a,
+                where_clauses_b,
             ),
             inverted_wc,
         )
@@ -166,8 +279,8 @@ fn overlap_check_impl(
             inverted_wc,
             (
                 Wcs::all_eq(&trait_ref_a.parameters, &trait_ref_b.parameters),
-                &a.where_clauses,
-                &b.where_clauses,
+                where_clauses_a,
+                where_clauses_b,
             )
         );
 
