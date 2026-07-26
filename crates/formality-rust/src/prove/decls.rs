@@ -59,6 +59,10 @@ impl Program {
         krate.items.iter().downcasted().collect()
     }
 
+    pub fn neg_trait_impls(&self) -> Vec<NegTraitImpl> {
+        self.crates.items_from_all_crates().downcasted().collect()
+    }
+
     pub fn impl_decls(&self, trait_id: &TraitId) -> Vec<ImplDecl> {
         self.crates
             .items_from_all_crates()
