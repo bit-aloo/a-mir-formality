@@ -1,10 +1,11 @@
 use crate::{
     grammar::{
-        AliasTy, Lt, Parameter, PredicateTy, RigidName, RigidTy, TraitRef, TyData, Variable, Wcs,
+        AliasTy, Lt, Parameter, PredicateTy, RigidName, RigidTy, TraitRef, Ty, TyData, Variable,
+        Wcs,
     },
     prove::Constrained,
 };
-use formality_core::judgment_fn;
+use formality_core::{judgment_fn, Downcast};
 
 use crate::prove::{
     combinators::for_all, decls::Program, env::Bias, negation::may_not_be_provable,
@@ -289,6 +290,15 @@ judgment_fn! {
             (is_local_parameter(decls, c1.env(), assumptions, p) => c2)
             --- ("local parameter")
             (is_local_parameter(decls, env, assumptions, goal) => c1.seq(c2))
+        )
+
+        // References are fundamental, but their lifetime parameter is irrelevant.
+        // Recurse only into the referent.
+        (
+            (let (_lt, ty) = parameters.downcast_err::<(Lt, Ty)>()?)
+            (is_local_parameter(decls, env, assumptions, ty) => c)
+            --- ("fundamental reference")
+            (is_local_parameter(decls, env, assumptions, RigidTy { name: RigidName::Ref(_), parameters }) => c)
         )
 
         // Fundamental types are local if all their arguments are local.
